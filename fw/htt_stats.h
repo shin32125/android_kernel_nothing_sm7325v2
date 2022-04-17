@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -413,6 +414,13 @@ enum htt_dbg_ext_stats_type {
 
     HTT_DBG_EXT_AST_ENTRIES = 41,
 
+    /** HTT_DBG_EXT_RX_RING_STATS
+     * PARAMS:
+     *    - No Params
+     * RESP MSG:
+     *    - htt_rx_fw_ring_stats_tlv_v
+     */
+    HTT_DBG_EXT_RX_RING_STATS = 42,
 
     /* keep this last */
     HTT_DBG_NUM_EXT_STATS = 256,
@@ -3172,6 +3180,42 @@ typedef struct {
     A_UINT32 invalid_tcl_exp_frame_desc;
     A_UINT32 vdev_id_mismatch_cnt;
 } htt_tx_de_cmn_stats_tlv;
+
+#define HTT_STATS_RX_FW_RING_SIZE_NUM_ENTRIES(dword) ((dword >> 0)  & 0xffff)
+#define HTT_STATS_RX_FW_RING_CURR_NUM_ENTRIES(dword) ((dword >> 16) & 0xffff)
+
+/* Rx debug info for status rings */
+typedef struct {
+    htt_tlv_hdr_t tlv_hdr;
+    /**
+     * BIT [15 :  0] :- max possible number of entries in respective ring
+     *                  (size of the ring in terms of entries)
+     * BIT [16 : 31] :- current number of entries occupied in respective ring
+     */
+    A_UINT32 entry_status_sw2rxdma;
+    A_UINT32 entry_status_rxdma2reo;
+    A_UINT32 entry_status_reo2sw1;
+    A_UINT32 entry_status_reo2sw4;
+    A_UINT32 entry_status_refillringipa;
+    A_UINT32 entry_status_refillringhost;
+    /** datarate - Moving Average of Number of Entries */
+    A_UINT32 datarate_refillringipa;
+    A_UINT32 datarate_refillringhost;
+    /**
+     * refillringhost_backpress_hist and refillringipa_backpress_hist are
+     * deprecated, and will be filled with 0x0 by the target.
+     */
+    A_UINT32 refillringhost_backpress_hist[3];
+    A_UINT32 refillringipa_backpress_hist[3];
+    /**
+     * Number of times reo2sw4(IPA_DEST_RING) ring is back-pressured
+     * in recent time periods
+     * element 0: in last 0 to 250ms
+     * element 1: 250ms to 500ms
+     * element 2: above 500ms
+     */
+    A_UINT32 reo2sw4ringipa_backpress_hist[3];
+} htt_rx_fw_ring_stats_tlv_v;
 
 /* STATS_TYPE : HTT_DBG_EXT_STATS_TX_DE_INFO
  * TLV_TAGS:
