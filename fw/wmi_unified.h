@@ -761,6 +761,9 @@ typedef enum {
     /* Group SET cmd for PEERS */
     WMI_PEER_BULK_SET_CMDID,
 
+    /* WMI command to setup reorder queue for multiple TIDs */
+    WMI_PEER_MULTIPLE_REORDER_QUEUE_SETUP_CMDID,
+
     /* beacon/management specific commands */
 
     /** transmit beacon by reference . used for transmitting beacon on low latency interface like pcie */
@@ -1244,6 +1247,9 @@ typedef enum {
 
     /* WMI comamnd for standalone sounding */
     WMI_VDEV_STANDALONE_SOUND_CMDID,
+
+    /* WMI cmd used by host to send the switch response status to FW */
+    WMI_AUDIO_TRANSPORT_SWITCH_RESP_STATUS_CMDID,
 
     /*  Offload 11k related requests */
     WMI_11K_OFFLOAD_REPORT_CMDID = WMI_CMD_GRP_START_ID(WMI_GRP_11K_OFFLOAD),
@@ -2247,6 +2253,9 @@ typedef enum {
 
     /* WMI standalone command complete Event */
     WMI_VDEV_STANDALONE_SOUND_COMPLETE_EVENTID,
+
+    /* WMI evt to indicate switch type either to WLAN(XPAN) or non_WLAN(BLE) */
+    WMI_AUDIO_TRANSPORT_SWITCH_TYPE_EVENTID,
 
 
     /* GPIO Event */
@@ -5917,6 +5926,7 @@ typedef enum {
 #define WMI_SCAN_FLAG_EXT_RELIABLE_SCAN       0x00010000
 #define WMI_SCAN_FLAG_EXT_FAST_SCAN           0x00020000
 #define WMI_SCAN_FLAG_EXT_LOW_POWER_SCAN      0x00040000
+#define WMI_SCAN_FLAG_EXT_STOP_IF_BSSID_FOUND 0x00080000
 
 
 /**
@@ -9325,6 +9335,9 @@ typedef enum {
 
     /** Parameter to set PDEV level UL OFDMA RTD */
     WMI_PDEV_PARAM_UL_OFDMA_RTD,
+
+    /** Parameter to enable/disable tid0 and tid3 mapping to work 3 Link MLO */
+    WMI_PDEV_PARAM_TID_MAPPING_3LINK_MLO,
 } WMI_PDEV_PARAM;
 
 #define WMI_PDEV_ONLY_BSR_TRIG_IS_ENABLED(trig_type) WMI_GET_BITS(trig_type, 0, 1)
@@ -9851,6 +9864,14 @@ typedef struct {
     /* current 64 bit TSF timestamp */
     A_UINT32 tx_tsf_l32;
     A_UINT32 tx_tsf_u32;
+    /* info:
+     * Bit[0:2]   - band on which frame is sent, band value will be
+     *              one of the wmi_mlo_band_info_t enum constants.
+     *              Macros WMI_ROAM_BTM_RESP_MLO_BAND_INFO_GET,SET
+     *              can be reused for setting mlo band info.
+     * Bit[3:31]  - reserved
+     */
+    A_UINT32 info;
 } wmi_mgmt_tx_compl_event_fixed_param;
 
 typedef struct {
@@ -10062,6 +10083,12 @@ typedef struct {
     /** idnore power , only use flags , mode and freq */
     wmi_channel chan;
 } wmi_pdev_set_channel_cmd;
+
+typedef struct {
+    A_UINT32 tlv_header;
+    /* DBW puncture bitmap */
+    A_UINT32 dbw_puncture_20mhz_bitmap;
+} wmi_dbw_chan_info;
 
 typedef enum {
     WMI_PKTLOG_EVENT_RX =  0x00000001,
@@ -16954,6 +16981,10 @@ typedef struct {
  *     wmi_partner_link_info link_info[]; <-- partner link info
  *         optional TLV, only present for MLO vdevs,
  *         If the vdev is non-MLO the array length should be 0.
+ *     wmi_channel dbw_chan; <-- WMI channel
+ *         optional TLV for dbw_chan
+ *     wmi_dbw_chan_info dbw_chan_info
+ *         optional TLV used for dbw_chan_info
  */
 } wmi_vdev_start_request_cmd_fixed_param;
 
@@ -18209,6 +18240,11 @@ typedef enum {
      * Disable FW initiated Information frame for TWT
      */
     WMI_VDEV_PARAM_DISABLE_TWT_INFO_FRAME,                /* 0xC0 */
+
+    /*
+     * Set the Recommended Max allowed active links
+     */
+    WMI_VDEV_PARAM_MLO_MAX_RECOM_ACTIVE_LINKS,            /* 0xC1 */
 
 
     /*=== ADD NEW VDEV PARAM TYPES ABOVE THIS LINE ===
@@ -23366,6 +23402,8 @@ typedef enum wake_reason_e {
     WOW_REASON_COEX_CHAVD,
     /* vdev repurpose request event */
     WOW_REASON_VDEV_REPURPOSE,
+    /* STX High duty cycle event */
+    WOW_REASON_STX_WOW_HIGH_DUTY_CYCLE,
 
     /* add new WOW_REASON_ defs before this line */
     WOW_REASON_MAX,
@@ -31714,6 +31752,39 @@ typedef struct {
                               * established or terminated for the TID. */
 } wmi_peer_reorder_queue_setup_cmd_fixed_param;
 
+typedef struct {
+    A_UINT32 tlv_header; /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_peer_per_reorder_q_setup_params_t */
+    A_UINT32 tid; /* 0 to 15 = QoS TIDs, 16 = non-qos TID */
+    A_UINT32 queue_ptr_lo; /* lower 32 bits of queue desc address */
+    A_UINT32 queue_ptr_hi; /* upper 32 bits of queue desc address */
+    A_UINT32 queue_no; /* 16-bit number assigned by host for queue,
+                        * stored in bits 15:0 of queue_no field */
+    A_UINT32 ba_window_size_valid; /* Is ba_window_size valid?
+                                    * 0 = Invalid, 1 = Valid */
+    A_UINT32 ba_window_size; /* Valid values: 0 to 256
+                              * Host sends the message when BA session is
+                              * established or terminated for the TID. */
+} wmi_peer_per_reorder_q_setup_params_t;
+
+/**
+ * This command is sent from WLAN host driver to firmware for
+ * plugging in reorder queue desc to hw for multiple TIDs in one shot.
+ *
+ * Example: plug-in queue desc
+ *    host->target: WMI_PEER_MULTIPLE_REORDER_QUEUE_SETUP_CMDID,
+ *                  (vdev_id = PEER vdev id,
+ *                   peer_macaddr = PEER mac addr)
+ */
+typedef struct {
+    A_UINT32 tlv_header; /* TLV tag and len; tag equals WMITLV_TAG_STRUC_wmi_peer_multiple_reorder_queue_setup_cmd_fixed_param */
+    A_UINT32 vdev_id;
+    wmi_mac_addr peer_macaddr; /* peer mac address */
+/*
+ * This struct is followed by other TLVs:
+ *   wmi_peer_per_reorder_q_setup_params_t q_setup_params[num_queues];
+ */
+} wmi_peer_multiple_reorder_queue_setup_cmd_fixed_param;
+
 /**
  * This command is sent from WLAN host driver to firmware for
  * removing one or more reorder queue desc to lithium hw.
@@ -36981,6 +37052,8 @@ static INLINE A_UINT8 *wmi_id_to_name(A_UINT32 wmi_command)
         WMI_RETURN_STRING(WMI_CSA_EVENT_STATUS_INDICATION_CMDID);
         WMI_RETURN_STRING(WMI_VDEV_SCHED_MODE_PROBE_REQ_CMDID);
         WMI_RETURN_STRING(WMI_VDEV_OOB_CONNECTION_REQ_CMDID);
+        WMI_RETURN_STRING(WMI_AUDIO_TRANSPORT_SWITCH_RESP_STATUS_CMDID);
+        WMI_RETURN_STRING(WMI_PEER_MULTIPLE_REORDER_QUEUE_SETUP_CMDID);
     }
 
     return (A_UINT8 *) "Invalid WMI cmd";
@@ -37876,6 +37949,10 @@ typedef struct {
      *    with vdev ID as index.
      * A_UINT32 preferred_rx_streams[]; <-- Array of preferred_rx_streams
      *    with vdev ID as index.
+     * wmi_channel dbw_chan; <-- WMI channel
+     *     optional TLV for dbw_chan
+     * wmi_dbw_chan_info dbw_chan_info
+     *     optional TLV used for dbw_chan_info
      */
 } wmi_pdev_multiple_vdev_restart_request_cmd_fixed_param;
 
@@ -47084,6 +47161,35 @@ typedef struct {
     /* OOB connection response type based on VDEV_OOB_CONNECT_REQ_RESP_TYPE */
     A_UINT32 connect_resp_type;
 } wmi_vdev_oob_connection_resp_event_fixed_param;
+
+typedef enum {
+    WMI_AUDIO_TRANSPORT_SWITCH_STATUS_FAIL = 0,
+    WMI_AUDIO_TRANSPORT_SWITCH_STATUS_SUCCESS,
+    WMI_AUDIO_TRANSPORT_SWITCH_STATUS_TIMEOUT,
+} WMI_AUDIO_TRANSPORT_SWITCH_RESPONSE_STATUS;
+
+typedef enum {
+    WMI_AUDIO_TRANSPORT_SWITCH_TYPE_NON_WLAN = 0,
+    WMI_AUDIO_TRANSPORT_SWITCH_TYPE_WLAN = 1,
+} WMI_AUDIO_TRANSPORT_SWITCH_TYPE;
+
+typedef struct {
+    /** TLV tag and len; tag equals
+    * WMITLV_TAG_STRUC_wmi_audio_transport_switch_type_event_fixed_param */
+    A_UINT32 tlv_header;
+    /** This indicates whether FW is requesting for switch to WLAN(XPAN) or non-WLAN(BLE) */
+    A_UINT32 switch_type;  /*see definition of WMI_AUDIO_TRANSPORT_SWITCH_TYPE */
+} wmi_audio_transport_switch_type_event_fixed_param;
+
+typedef struct {
+    /** TLV tag and len; tag equals
+    * WMITLV_TAG_STRUC_wmi_audio_transport_switch_resp_status_cmd_fixed_param */
+    A_UINT32 tlv_header;
+    /** This indicates whether switch response status is success, fail, timeout */
+    A_UINT32 switch_response_status;  /* see definition of WMI_AUDIO_TRANSPORT_SWITCH_RESPONSE_STATUS */
+    /** This indicates for which switch type (WLAN(XPAN) or non-WLAN(BLE)) the switch response status is intended to */
+    A_UINT32 switch_type;  /* see definition of WMI_AUDIO_TRANSPORT_SWITCH_TYPE */
+} wmi_audio_transport_switch_resp_status_cmd_fixed_param;
 
 
 
